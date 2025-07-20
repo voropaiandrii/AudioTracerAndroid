@@ -1,0 +1,41 @@
+# Build and generated files
+build/
+app/build/
+.gradle/
+bin/
+gen/
+
+# IDE and project files
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Local configuration
+local.properties
+
+# Keystore files
+*.jks
+*.keystore
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Crashlytics and Fabric
+crashlytics.properties
+crashlytics-build.properties
+fabric.properties
+
+# NDK
+obj/
+.externalNativeBuild/
+.cxx/
+
+# Other
+captures/
+output.json
+
+# Lint/intermediates
+lint/intermediates/
+app/lint/intermediates/ 
