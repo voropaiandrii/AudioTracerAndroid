@@ -2,7 +2,6 @@ package com.voropai.labs.audiotracer
 
 import android.app.Application
 import android.content.Intent
-import android.os.Environment
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -13,21 +12,20 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.io.File
 import java.text.DecimalFormat
-import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 
 enum class RecordingStatus { Stopped, Recording, Paused }
 
 @HiltViewModel
-class RecorderViewModel @Inject constructor(
+open class RecorderViewModel @Inject constructor(
     app: Application
 ) : AndroidViewModel(app) {
 
     private val _status = MutableStateFlow(RecordingStatus.Stopped)
-    val status: StateFlow<RecordingStatus> = _status.asStateFlow()
+    open val status: StateFlow<RecordingStatus> = _status.asStateFlow()
 
-    private val _freeStorage = MutableStateFlow(StorageInfo(0L, "00:00"))
-    val freeStorage: StateFlow<StorageInfo> = _freeStorage.asStateFlow()
+    private val _freeStorage = MutableStateFlow(StorageInfo(0L, "00:00", 0))
+    open val freeStorage: StateFlow<StorageInfo> = _freeStorage.asStateFlow()
 
     private val permissionManager = PermissionManager(app)
     private val storageManager = StorageManager(app)
@@ -37,7 +35,7 @@ class RecorderViewModel @Inject constructor(
         checkServiceStatus()
     }
 
-    fun hasRequiredPermissions(): Boolean {
+    open fun hasRequiredPermissions(): Boolean {
         return permissionManager.hasRequiredPermissions()
     }
 
@@ -49,7 +47,7 @@ class RecorderViewModel @Inject constructor(
         return permissionManager.getPermissionRequestCode()
     }
 
-    fun startRecording() {
+    open fun startRecording() {
         if (!hasRequiredPermissions()) return
         
         val intent = Intent(getApplication(), AudioRecorderService::class.java).apply {
@@ -59,7 +57,7 @@ class RecorderViewModel @Inject constructor(
         _status.value = RecordingStatus.Recording
     }
 
-    fun pauseRecording() {
+    open fun pauseRecording() {
         if (_status.value == RecordingStatus.Recording) {
             val intent = Intent(getApplication(), AudioRecorderService::class.java).apply {
                 action = AudioRecorderService.ACTION_PAUSE
@@ -69,7 +67,7 @@ class RecorderViewModel @Inject constructor(
         }
     }
 
-    fun resumeRecording() {
+    open fun resumeRecording() {
         if (_status.value == RecordingStatus.Paused) {
             val intent = Intent(getApplication(), AudioRecorderService::class.java).apply {
                 action = AudioRecorderService.ACTION_RESUME
@@ -79,7 +77,7 @@ class RecorderViewModel @Inject constructor(
         }
     }
 
-    fun stopRecording() {
+    open fun stopRecording() {
         val intent = Intent(getApplication(), AudioRecorderService::class.java).apply {
             action = AudioRecorderService.ACTION_STOP
         }
@@ -107,11 +105,11 @@ class RecorderViewModel @Inject constructor(
         return storageManager.getTodayFile()
     }
 
-    fun updateStorageInfo() {
+    open fun updateStorageInfo() {
         viewModelScope.launch(Dispatchers.IO) {
             val freeBytes = storageManager.getAvailableStorage()
             val timeLeft = getAudioTimeLeft(freeBytes)
-            _freeStorage.value = StorageInfo(freeBytes, timeLeft)
+            _freeStorage.value = StorageInfo(freeBytes, timeLeft, Constants.Audio.ENCODING_BIT_RATE)
         }
     }
 
@@ -120,20 +118,30 @@ class RecorderViewModel @Inject constructor(
     }
 
     private fun getAudioTimeLeft(bytes: Long): String {
-        // 128 kbps = 16 KB/s
-        val seconds = bytes / 16_000
-        val minutes = TimeUnit.SECONDS.toMinutes(seconds)
+        // kbps to KB/s
+        val seconds = bytes / (Constants.Audio.ENCODING_BIT_RATE / 8)
+        val days = seconds / (24 * 60 * 60)
+        val hours = (seconds / (60 * 60)) % 24
+        val minutes = (seconds / 60) % 60
         val remainingSeconds = seconds % 60
-        return String.format("%02d:%02d", minutes, remainingSeconds)
+
+        return String.format(
+            "%d:%02d:%02d:%02d",
+            days,
+            hours,
+            minutes,
+            remainingSeconds
+        )
     }
 }
 
 data class StorageInfo(
     val freeBytes: Long,
-    val timeLeft: String
+    val timeLeft: String,
+    val audioBitRate: Int
 ) {
-    fun formattedBytes(): String {
+    fun formattedKiloBytes(): String {
         val df = DecimalFormat("#,###")
-        return df.format(freeBytes)
+        return df.format(freeBytes/1024)
     }
 } 

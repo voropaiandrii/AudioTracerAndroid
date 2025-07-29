@@ -1,16 +1,20 @@
 package com.voropai.labs.audiotracer
 
-import android.app.*
-import android.content.*
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Intent
 import android.media.MediaRecorder
-import android.os.*
+import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
 import dagger.hilt.android.AndroidEntryPoint
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import java.io.File
-import java.text.SimpleDateFormat
-import java.util.*
 
 @AndroidEntryPoint
 class AudioRecorderService : LifecycleService() {
@@ -63,11 +67,12 @@ class AudioRecorderService : LifecycleService() {
             ensureDirectoryExists(file.parentFile)
             
             recorder = MediaRecorder().apply {
-                setAudioSource(MediaRecorder.AudioSource.MIC)
+                setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION) // tuned for speech capture
                 setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                setAudioEncodingBitRate(128_000)
-                setAudioSamplingRate(44100)
+                setAudioEncoder(MediaRecorder.AudioEncoder.HE_AAC)
+                setAudioChannels(1)
+                setAudioSamplingRate(Constants.Audio.SAMPLE_RATE)          // 24–32 kHz works well with HE‑AAC
+                setAudioEncodingBitRate(Constants.Audio.ENCODING_BIT_RATE)
                 setOutputFile(file.absolutePath)
                 
                 try {
@@ -170,11 +175,13 @@ class AudioRecorderService : LifecycleService() {
         
         val recordingDuration = if (recordingStartTime > 0) {
             val duration = System.currentTimeMillis() - recordingStartTime
-            val minutes = duration / 60000
-            val seconds = (duration % 60000) / 1000
-            String.format("%02d:%02d", minutes, seconds)
+            val days = duration / (24 * 60 * 60 * 1000)
+            val hours = (duration / (60 * 60 * 1000)) % 24
+            val minutes = (duration / (60 * 1000)) % 60
+            val seconds = (duration / 1000) % 60
+            String.format("%d:%02d:%02d:%02d", days, hours, minutes, seconds)
         } else {
-            "00:00"
+            "00:00:00:00"
         }
         
         val stopIntent = PendingIntent.getService(

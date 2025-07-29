@@ -22,7 +22,7 @@ class StorageManager(private val context: Context) {
     
     fun getTodayFile(): File {
         val audioDir = getAudioDirectory()
-        val date = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+        val date = SimpleDateFormat("yyyy-MM-dd-HH-mm-SS", Locale.US).format(Date())
         return File(audioDir, "$date.m4a")
     }
     
