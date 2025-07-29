@@ -11,8 +11,14 @@
 ## Features
 
 - Recording control: Start, Pause/Resume, Stop buttons
-- Status display: Real-time “Recording”, “Paused”, or “Stopped”
-- Storage info: Shows free storage (bytes & HH:MM of audio left at 128 kbps), updates every 10 seconds
+- Status display: Real-time "Recording", "Paused", or "Stopped"
+- Storage info: Shows free storage (bytes & HH:MM of audio left at 128 kbps), updates every 10 seconds
+- **Seamless file rolling**: Automatic file splitting to avoid 2-4 GB container limits
+  - 500 MB per file (configurable)
+  - 1 hour per file (configurable) 
+  - Near-zero gap recording on API 26+ using `setNextOutputFile`
+  - Fallback support for older APIs
+  - Sequential file naming: `timestamp.m4a`, `timestamp_p1.m4a`, etc.
 
 ## How to Build
 

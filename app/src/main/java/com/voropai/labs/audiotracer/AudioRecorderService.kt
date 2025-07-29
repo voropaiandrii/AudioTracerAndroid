@@ -14,6 +14,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.io.File
 
 @AndroidEntryPoint
@@ -35,6 +37,8 @@ class AudioRecorderService : LifecycleService() {
     private var recordingStartTime: Long = 0
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private lateinit var storageManager: StorageManager
+    private var fileRollingInProgress = false
+    private var fileSizeMonitorJob: kotlinx.coroutines.Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -63,7 +67,7 @@ class AudioRecorderService : LifecycleService() {
         if (isRecording) return
         
         try {
-            val file = storageManager.getTodayFile()
+            val file = storageManager.startRecordingSession()
             ensureDirectoryExists(file.parentFile)
             
             recorder = MediaRecorder().apply {
@@ -75,13 +79,26 @@ class AudioRecorderService : LifecycleService() {
                 setAudioEncodingBitRate(Constants.Audio.ENCODING_BIT_RATE)
                 setOutputFile(file.absolutePath)
                 
+                // Use manual file size monitoring instead of MediaRecorder's built-in file rolling
+                // This provides more reliable control over the file rolling process
+                android.util.Log.d("AudioRecorderService", "Setting up manual file size monitoring with max size: ${Constants.Audio.MAX_FILE_SIZE_BYTES} bytes")
+                
                 try {
                     prepare()
                     start()
                     currentFile = file
+                    storageManager.setCurrentFile(file)
                     isRecording = true
                     isPaused = false
                     recordingStartTime = System.currentTimeMillis()
+                    
+                    // Start file size monitoring AFTER recording has started
+                    android.util.Log.d("AudioRecorderService", "Recording started, initiating file size monitoring")
+                    startFileSizeMonitoring()
+                    
+                    // Add a test log to verify monitoring is working
+                    android.util.Log.d("AudioRecorderService", "File size monitoring should now be active")
+                    
                     updateNotification()
                 } catch (e: Exception) {
                     release()
@@ -101,6 +118,7 @@ class AudioRecorderService : LifecycleService() {
             try {
                 recorder?.pause()
                 isPaused = true
+                fileSizeMonitorJob?.cancel() // Pause file size monitoring
                 updateNotification()
             } catch (e: Exception) {
                 // Handle pause failure
@@ -115,6 +133,7 @@ class AudioRecorderService : LifecycleService() {
             try {
                 recorder?.resume()
                 isPaused = false
+                startFileSizeMonitoring() // Resume file size monitoring
                 updateNotification()
             } catch (e: Exception) {
                 // Handle resume failure
@@ -136,8 +155,13 @@ class AudioRecorderService : LifecycleService() {
             recorder = null
             isRecording = false
             isPaused = false
+            fileRollingInProgress = false
+            fileSizeMonitorJob?.cancel()
+            fileSizeMonitorJob = null
             currentFile = null
+            storageManager.setCurrentFile(null)
             recordingStartTime = 0
+            storageManager.resetSession()
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         }
@@ -149,6 +173,110 @@ class AudioRecorderService : LifecycleService() {
 
     private fun ensureDirectoryExists(directory: File?) {
         directory?.mkdirs()
+    }
+    
+    private fun startFileSizeMonitoring() {
+        fileSizeMonitorJob?.cancel()
+        fileSizeMonitorJob = serviceScope.launch {
+            android.util.Log.d("AudioRecorderService", "File size monitoring started")
+            var checkCount = 0
+            var lastFileSize = 0L
+            
+            while (isRecording && !isPaused) {
+                try {
+                    val currentFile = currentFile
+                    if (currentFile == null) {
+                        android.util.Log.w("AudioRecorderService", "Current file is null, skipping size check")
+                        delay(500)
+                        continue
+                    }
+                    
+                    if (!currentFile.exists()) {
+                        android.util.Log.w("AudioRecorderService", "Current file does not exist: ${currentFile.absolutePath}")
+                        delay(500)
+                        continue
+                    }
+                    
+                    val currentFileSize = currentFile.length()
+                    val maxSize = Constants.Audio.MAX_FILE_SIZE_BYTES
+                    checkCount++
+                    
+                    // Log if file size is changing
+                    if (currentFileSize != lastFileSize) {
+                        android.util.Log.d("AudioRecorderService", "Check #$checkCount - File size changed: $lastFileSize -> $currentFileSize bytes, Max: $maxSize bytes, File: ${currentFile.name}")
+                        lastFileSize = currentFileSize
+                    } else if (checkCount % 10 == 0) { // Log every 10th check if size hasn't changed
+                        android.util.Log.d("AudioRecorderService", "Check #$checkCount - File size stable: $currentFileSize bytes, Max: $maxSize bytes, File: ${currentFile.name}")
+                    }
+                    
+                    if (currentFileSize >= maxSize) {
+                        android.util.Log.d("AudioRecorderService", "File size limit reached ($currentFileSize >= $maxSize), initiating file roll")
+                        performFileRoll()
+                        break
+                    }
+                    
+                    delay(500) // Check every 500ms for more responsive file rolling
+                } catch (e: Exception) {
+                    android.util.Log.e("AudioRecorderService", "Error in file size monitoring: ${e.message}", e)
+                    break
+                }
+            }
+            android.util.Log.d("AudioRecorderService", "File size monitoring stopped")
+        }
+    }
+    
+    private fun performFileRoll() {
+        if (fileRollingInProgress) {
+            android.util.Log.w("AudioRecorderService", "File rolling already in progress")
+            return
+        }
+        
+        fileRollingInProgress = true
+        android.util.Log.d("AudioRecorderService", "Starting file roll")
+        
+        try {
+            // Stop current recording
+            recorder?.apply {
+                stop()
+                release()
+            }
+            
+            // Create next file
+            val nextFile = storageManager.createNextFile()
+            ensureDirectoryExists(nextFile.parentFile)
+            android.util.Log.d("AudioRecorderService", "Next file: ${nextFile.absolutePath}")
+            
+            // Start new recording with next file
+            recorder = MediaRecorder().apply {
+                setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
+                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                setAudioEncoder(MediaRecorder.AudioEncoder.HE_AAC)
+                setAudioChannels(1)
+                setAudioSamplingRate(Constants.Audio.SAMPLE_RATE)
+                setAudioEncodingBitRate(Constants.Audio.ENCODING_BIT_RATE)
+                setOutputFile(nextFile.absolutePath)
+                
+                prepare()
+                start()
+            }
+            
+            // Update current file reference
+            currentFile = nextFile
+            storageManager.setCurrentFile(nextFile)
+            fileRollingInProgress = false
+            
+            // Restart file size monitoring
+            startFileSizeMonitoring()
+            
+            android.util.Log.d("AudioRecorderService", "File roll completed successfully")
+            updateNotification()
+            
+        } catch (e: Exception) {
+            android.util.Log.e("AudioRecorderService", "Error during file roll: ${e.message}", e)
+            fileRollingInProgress = false
+            // If file roll fails, stop recording
+            stopRecording()
+        }
     }
 
     private fun createNotificationChannel() {
@@ -184,6 +312,18 @@ class AudioRecorderService : LifecycleService() {
             "00:00:00:00"
         }
         
+        // Add file info to notification
+        val fileInfo = if (currentFile != null) {
+            val fileIndex = storageManager.getCurrentFileIndex()
+            if (fileIndex > 0) {
+                " (Part ${fileIndex + 1})"
+            } else {
+                ""
+            }
+        } else {
+            ""
+        }
+        
         val stopIntent = PendingIntent.getService(
             this, 0, Intent(this, AudioRecorderService::class.java).apply {
                 action = ACTION_STOP
@@ -197,7 +337,7 @@ class AudioRecorderService : LifecycleService() {
         )
         
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("AudioTracer")
+            .setContentTitle("AudioTracer$fileInfo")
             .setContentText("$status - $recordingDuration")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .addAction(
