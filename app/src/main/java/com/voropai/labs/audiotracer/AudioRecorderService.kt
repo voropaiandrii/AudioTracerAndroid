@@ -39,6 +39,7 @@ class AudioRecorderService : LifecycleService() {
     private lateinit var storageManager: StorageManager
     private var fileRollingInProgress = false
     private var fileSizeMonitorJob: kotlinx.coroutines.Job? = null
+    private var notificationUpdateJob: kotlinx.coroutines.Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -88,6 +89,7 @@ class AudioRecorderService : LifecycleService() {
                     start()
                     currentFile = file
                     storageManager.setCurrentFile(file)
+                    storageManager.setSessionStartTime(System.currentTimeMillis())
                     isRecording = true
                     isPaused = false
                     recordingStartTime = System.currentTimeMillis()
@@ -95,6 +97,9 @@ class AudioRecorderService : LifecycleService() {
                     // Start file size monitoring AFTER recording has started
                     android.util.Log.d("AudioRecorderService", "Recording started, initiating file size monitoring")
                     startFileSizeMonitoring()
+                    
+                    // Start notification updates
+                    startNotificationUpdates()
                     
                     // Add a test log to verify monitoring is working
                     android.util.Log.d("AudioRecorderService", "File size monitoring should now be active")
@@ -119,7 +124,8 @@ class AudioRecorderService : LifecycleService() {
                 recorder?.pause()
                 isPaused = true
                 fileSizeMonitorJob?.cancel() // Pause file size monitoring
-                updateNotification()
+                notificationUpdateJob?.cancel() // Pause notification updates
+                updateNotification() // Update once to show paused state
             } catch (e: Exception) {
                 // Handle pause failure
             }
@@ -134,6 +140,7 @@ class AudioRecorderService : LifecycleService() {
                 recorder?.resume()
                 isPaused = false
                 startFileSizeMonitoring() // Resume file size monitoring
+                startNotificationUpdates() // Resume notification updates
                 updateNotification()
             } catch (e: Exception) {
                 // Handle resume failure
@@ -158,6 +165,8 @@ class AudioRecorderService : LifecycleService() {
             fileRollingInProgress = false
             fileSizeMonitorJob?.cancel()
             fileSizeMonitorJob = null
+            notificationUpdateJob?.cancel()
+            notificationUpdateJob = null
             currentFile = null
             storageManager.setCurrentFile(null)
             recordingStartTime = 0
@@ -225,6 +234,23 @@ class AudioRecorderService : LifecycleService() {
         }
     }
     
+    private fun startNotificationUpdates() {
+        notificationUpdateJob?.cancel()
+        notificationUpdateJob = serviceScope.launch {
+            android.util.Log.d("AudioRecorderService", "Starting notification updates")
+            while (isRecording) {
+                try {
+                    updateNotification()
+                    delay(1000) // Update every second
+                } catch (e: Exception) {
+                    android.util.Log.e("AudioRecorderService", "Error updating notification: ${e.message}", e)
+                    break
+                }
+            }
+            android.util.Log.d("AudioRecorderService", "Notification updates stopped")
+        }
+    }
+    
     private fun performFileRoll() {
         if (fileRollingInProgress) {
             android.util.Log.w("AudioRecorderService", "File rolling already in progress")
@@ -268,6 +294,9 @@ class AudioRecorderService : LifecycleService() {
             // Restart file size monitoring
             startFileSizeMonitoring()
             
+            // Restart notification updates
+            startNotificationUpdates()
+            
             android.util.Log.d("AudioRecorderService", "File roll completed successfully")
             updateNotification()
             
@@ -301,16 +330,7 @@ class AudioRecorderService : LifecycleService() {
             else -> "Stopped"
         }
         
-        val recordingDuration = if (recordingStartTime > 0) {
-            val duration = System.currentTimeMillis() - recordingStartTime
-            val days = duration / (24 * 60 * 60 * 1000)
-            val hours = (duration / (60 * 60 * 1000)) % 24
-            val minutes = (duration / (60 * 1000)) % 60
-            val seconds = (duration / 1000) % 60
-            String.format("%d:%02d:%02d:%02d", days, hours, minutes, seconds)
-        } else {
-            "00:00:00:00"
-        }
+        val recordingDuration = storageManager.getCurrentSessionDurationFormatted()
         
         // Add file info to notification
         val fileInfo = if (currentFile != null) {

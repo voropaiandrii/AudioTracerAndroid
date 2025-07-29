@@ -19,23 +19,27 @@ enum class RecordingStatus { Stopped, Recording, Paused }
 @HiltViewModel
 open class RecorderViewModel @Inject constructor(
     app: Application
-) : AndroidViewModel(app) {
+) : AndroidViewModel(app), RecorderViewModelInterface {
 
     private val _status = MutableStateFlow(RecordingStatus.Stopped)
-    open val status: StateFlow<RecordingStatus> = _status.asStateFlow()
+    override open val status: StateFlow<RecordingStatus> = _status.asStateFlow()
 
     private val _freeStorage = MutableStateFlow(StorageInfo(0L, "00:00", 0))
-    open val freeStorage: StateFlow<StorageInfo> = _freeStorage.asStateFlow()
+    override open val freeStorage: StateFlow<StorageInfo> = _freeStorage.asStateFlow()
+
+    private val _recordingDuration = MutableStateFlow("00:00:00:00")
+    override open val recordingDuration: StateFlow<String> = _recordingDuration.asStateFlow()
 
     private val permissionManager = PermissionManager(app)
     private val storageManager = StorageManager(app)
 
     init {
         updateStorageInfo()
+        updateRecordingDuration()
         checkServiceStatus()
     }
 
-    open fun hasRequiredPermissions(): Boolean {
+    override open fun hasRequiredPermissions(): Boolean {
         return permissionManager.hasRequiredPermissions()
     }
 
@@ -47,7 +51,7 @@ open class RecorderViewModel @Inject constructor(
         return permissionManager.getPermissionRequestCode()
     }
 
-    open fun startRecording() {
+    override open fun startRecording() {
         if (!hasRequiredPermissions()) return
         
         val intent = Intent(getApplication(), AudioRecorderService::class.java).apply {
@@ -55,47 +59,57 @@ open class RecorderViewModel @Inject constructor(
         }
         getApplication<Application>().startForegroundService(intent)
         _status.value = RecordingStatus.Recording
+        updateRecordingDuration()
     }
 
-    open fun pauseRecording() {
+    override open fun pauseRecording() {
         if (_status.value == RecordingStatus.Recording) {
             val intent = Intent(getApplication(), AudioRecorderService::class.java).apply {
                 action = AudioRecorderService.ACTION_PAUSE
             }
             getApplication<Application>().startForegroundService(intent)
             _status.value = RecordingStatus.Paused
+            updateRecordingDuration()
         }
     }
 
-    open fun resumeRecording() {
+    override open fun resumeRecording() {
         if (_status.value == RecordingStatus.Paused) {
             val intent = Intent(getApplication(), AudioRecorderService::class.java).apply {
                 action = AudioRecorderService.ACTION_RESUME
             }
             getApplication<Application>().startForegroundService(intent)
             _status.value = RecordingStatus.Recording
+            updateRecordingDuration()
         }
     }
 
-    open fun stopRecording() {
+    override open fun stopRecording() {
         val intent = Intent(getApplication(), AudioRecorderService::class.java).apply {
             action = AudioRecorderService.ACTION_STOP
         }
         getApplication<Application>().startForegroundService(intent)
         _status.value = RecordingStatus.Stopped
+        storageManager.resetSession()
+        _recordingDuration.value = "00:00:00:00"
     }
 
     private fun checkServiceStatus() {
         viewModelScope.launch(Dispatchers.IO) {
-            // Check if service is running by looking for today's file
-            val todayFile = storageManager.getTodayFile()
-            if (todayFile.exists()) {
-                // Service might be running, check if it's actually recording
-                // For now, we'll assume it's recording if file exists and has recent modification
-                val lastModified = todayFile.lastModified()
-                val currentTime = System.currentTimeMillis()
-                if (currentTime - lastModified < 60000) { // Modified within last minute
-                    _status.value = RecordingStatus.Recording
+            // Check if there's an active recording session
+            if (storageManager.hasActiveSession()) {
+                _status.value = RecordingStatus.Recording
+                updateRecordingDuration()
+            } else {
+                // Fallback to checking today's file for backward compatibility
+                val todayFile = storageManager.getTodayFile()
+                if (todayFile.exists()) {
+                    val lastModified = todayFile.lastModified()
+                    val currentTime = System.currentTimeMillis()
+                    if (currentTime - lastModified < 60000) { // Modified within last minute
+                        _status.value = RecordingStatus.Recording
+                        updateRecordingDuration()
+                    }
                 }
             }
         }
@@ -105,11 +119,18 @@ open class RecorderViewModel @Inject constructor(
         return storageManager.getTodayFile()
     }
 
-    open fun updateStorageInfo() {
+    override open fun updateStorageInfo() {
         viewModelScope.launch(Dispatchers.IO) {
             val freeBytes = storageManager.getAvailableStorage()
             val timeLeft = getAudioTimeLeft(freeBytes)
             _freeStorage.value = StorageInfo(freeBytes, timeLeft, Constants.Audio.ENCODING_BIT_RATE)
+        }
+    }
+
+    override open fun updateRecordingDuration() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val duration = storageManager.getCurrentSessionDurationFormatted()
+            _recordingDuration.value = duration
         }
     }
 

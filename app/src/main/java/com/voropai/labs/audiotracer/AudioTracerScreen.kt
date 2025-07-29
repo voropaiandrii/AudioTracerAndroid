@@ -32,14 +32,68 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
+// Interface for ViewModel operations needed by the UI
+interface RecorderViewModelInterface {
+    val status: StateFlow<RecordingStatus>
+    val freeStorage: StateFlow<StorageInfo>
+    val recordingDuration: StateFlow<String>
+    fun hasRequiredPermissions(): Boolean
+    fun startRecording()
+    fun pauseRecording()
+    fun resumeRecording()
+    fun stopRecording()
+    fun updateStorageInfo()
+    fun updateRecordingDuration()
+}
+
+// Mock ViewModel for previews
+class MockRecorderViewModel : RecorderViewModelInterface {
+    private val _status = MutableStateFlow(RecordingStatus.Recording)
+    override val status: StateFlow<RecordingStatus> get() = _status
+    
+    private val _freeStorage = MutableStateFlow(StorageInfo(1024 * 1024 * 512, "1:02:03:45", 16000))
+    override val freeStorage: StateFlow<StorageInfo> get() = _freeStorage
+    
+    private val _recordingDuration = MutableStateFlow("00:15:32")
+    override val recordingDuration: StateFlow<String> get() = _recordingDuration
+    
+    override fun hasRequiredPermissions() = true
+    override fun startRecording() {}
+    override fun pauseRecording() {}
+    override fun resumeRecording() {}
+    override fun stopRecording() {}
+    override fun updateStorageInfo() {}
+    override fun updateRecordingDuration() {}
+}
+
+class MockRecorderViewModelNoPermissions : RecorderViewModelInterface {
+    private val _status = MutableStateFlow(RecordingStatus.Stopped)
+    override val status: StateFlow<RecordingStatus> get() = _status
+    
+    private val _freeStorage = MutableStateFlow(StorageInfo(1024 * 1024 * 256, "0:12:30:15", 16000))
+    override val freeStorage: StateFlow<StorageInfo> get() = _freeStorage
+    
+    private val _recordingDuration = MutableStateFlow("00:00:00")
+    override val recordingDuration: StateFlow<String> get() = _recordingDuration
+    
+    override fun hasRequiredPermissions() = false
+    override fun startRecording() {}
+    override fun pauseRecording() {}
+    override fun resumeRecording() {}
+    override fun stopRecording() {}
+    override fun updateStorageInfo() {}
+    override fun updateRecordingDuration() {}
+}
+
 @Composable
 fun AudioTracerScreen(
-    viewModel: RecorderViewModel,
+    viewModel: RecorderViewModelInterface,
     onRequestPermissions: () -> Unit,
     onRequestManageExternalStorage: () -> Unit
 ) {
     val status by viewModel.status.collectAsState()
     val storageInfo by viewModel.freeStorage.collectAsState()
+    val recordingDuration by viewModel.recordingDuration.collectAsState()
     val hasPermissions by remember { derivedStateOf { viewModel.hasRequiredPermissions() } }
 
     val coroutineScope = rememberCoroutineScope()
@@ -49,6 +103,16 @@ fun AudioTracerScreen(
         while (true) {
             viewModel.updateStorageInfo()
             delay(10_000)
+        }
+    }
+
+    // Update recording duration every second when recording
+    LaunchedEffect(status) {
+        if (status == RecordingStatus.Recording || status == RecordingStatus.Paused) {
+            while (status == RecordingStatus.Recording || status == RecordingStatus.Paused) {
+                viewModel.updateRecordingDuration()
+                delay(1_000)
+            }
         }
     }
 
@@ -90,6 +154,10 @@ fun AudioTracerScreen(
                 )
 
                 Spacer(modifier = Modifier.height(32.dp))
+
+                RecordingDurationDisplay(recordingDuration = recordingDuration)
+
+                Spacer(modifier = Modifier.height(16.dp))
 
                 StorageInfoDisplay(storageInfo = storageInfo)
             }
@@ -178,6 +246,22 @@ fun StatusDisplay(status: RecordingStatus) {
 }
 
 @Composable
+fun RecordingDurationDisplay(recordingDuration: String) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            text = "Recording Duration",
+            style = MaterialTheme.typography.titleMedium,
+            textAlign = TextAlign.Center
+        )
+        Text(
+            text = recordingDuration,
+            style = MaterialTheme.typography.headlineMedium,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+@Composable
 fun StorageInfoDisplay(storageInfo: StorageInfo) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
@@ -198,18 +282,19 @@ fun StorageInfoDisplay(storageInfo: StorageInfo) {
 fun AudioTracerScreenPreview() {
     MaterialTheme {
         AudioTracerScreen(
-            viewModel = object : RecorderViewModel(Application()) {
-                private val _status = MutableStateFlow(RecordingStatus.Recording)
-                override val status: StateFlow<RecordingStatus> get() = _status
-                private val _freeStorage = MutableStateFlow(StorageInfo(1024 * 1024 * 512, "1:02:03:45", 16000))
-                override val freeStorage: StateFlow<StorageInfo> get() = _freeStorage
-                override fun hasRequiredPermissions() = true
-                override fun startRecording() {}
-                override fun pauseRecording() {}
-                override fun resumeRecording() {}
-                override fun stopRecording() {}
-                override fun updateStorageInfo() {}
-            },
+            viewModel = MockRecorderViewModel(),
+            onRequestPermissions = {},
+            onRequestManageExternalStorage = {}
+        )
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+fun AudioTracerScreenPermissionPreview() {
+    MaterialTheme {
+        AudioTracerScreen(
+            viewModel = MockRecorderViewModelNoPermissions(),
             onRequestPermissions = {},
             onRequestManageExternalStorage = {}
         )
