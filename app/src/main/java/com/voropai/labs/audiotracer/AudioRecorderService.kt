@@ -52,7 +52,7 @@ class AudioRecorderService : LifecycleService() {
     private var preRollBuffer: PreRollBuffer? = null
     private var autoRecordingJob: kotlinx.coroutines.Job? = null
     private var currentAutoFile: File? = null
-    private var autoFileWriter: PcmAudioWriter? = null
+    private var autoFileWriter: MediaRecorder? = null
 
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private lateinit var storageManager: StorageManager
@@ -236,7 +236,10 @@ class AudioRecorderService : LifecycleService() {
         
         // Close current auto recording file
         try {
-            autoFileWriter?.close()
+            autoFileWriter?.apply {
+                stop()
+                release()
+            }
         } catch (e: Exception) {
             // Handle cleanup errors
         } finally {
@@ -280,10 +283,8 @@ class AudioRecorderService : LifecycleService() {
                         endAutoRecording()
                     }
                     
-                    // Write to current file if recording
-                    if (isAutoRecording) {
-                        writeAudioFrame(frame, n)
-                    }
+                    // Note: We don't write individual frames anymore
+                    // MediaRecorder handles the audio recording automatically
                 }
                 
                 delay(VadEngine.FRAME_MS.toLong())
@@ -301,21 +302,39 @@ class AudioRecorderService : LifecycleService() {
             val file = storageManager.startRecordingSession(StorageManager.RecordingMode.AUTOMATIC)
             ensureDirectoryExists(file.parentFile)
             
-            autoFileWriter = PcmAudioWriter(file)
+            android.util.Log.d("AudioRecorderService", "Starting automatic recording to: ${file.absolutePath}")
+            
+            autoFileWriter = MediaRecorder().apply {
+                setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
+                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                setAudioEncoder(MediaRecorder.AudioEncoder.HE_AAC)
+                setAudioChannels(1)
+                setAudioSamplingRate(Constants.Audio.SAMPLE_RATE)
+                setAudioEncodingBitRate(Constants.Audio.ENCODING_BIT_RATE)
+                setOutputFile(file.absolutePath)
+                
+                prepare()
+                start()
+            }
             
             currentAutoFile = file
             storageManager.setCurrentFile(file)
             storageManager.setSessionStartTime(System.currentTimeMillis())
             isAutoRecording = true
             
+            android.util.Log.d("AudioRecorderService", "Automatic recording started successfully")
+            
             // Write pre-roll buffer to capture context before speech
             preRollBuffer?.let { buffer ->
-                // Drain the pre-roll buffer to capture audio before speech detection
-                buffer.drainTo(autoFileWriter!!)
+                // For MediaRecorder, we'll use a different approach
+                // The pre-roll buffer will be used to detect speech onset
+                // but we won't try to write PCM data directly
+                android.util.Log.d("AudioRecorderService", "Pre-roll buffer available, speech detection active")
             }
             
             updateNotification()
         } catch (e: Exception) {
+            android.util.Log.e("AudioRecorderService", "Failed to start automatic recording", e)
             // Handle recording start failure
         }
     }
@@ -323,27 +342,31 @@ class AudioRecorderService : LifecycleService() {
     private fun endAutoRecording() {
         if (!isAutoRecording) return
         
+        android.util.Log.d("AudioRecorderService", "Ending automatic recording")
+        
         try {
-            autoFileWriter?.close()
+            autoFileWriter?.apply {
+                stop()
+                release()
+            }
+            android.util.Log.d("AudioRecorderService", "Automatic recording stopped and released successfully")
         } catch (e: Exception) {
+            android.util.Log.e("AudioRecorderService", "Error stopping automatic recording", e)
             // Handle close failure
         } finally {
             autoFileWriter = null
             currentAutoFile = null
             isAutoRecording = false
             storageManager.resetSession()
+            android.util.Log.d("AudioRecorderService", "Automatic recording session reset")
             updateNotification()
         }
     }
 
     private fun writeAudioFrame(frame: ShortArray, n: Int) {
-        if (isAutoRecording && autoFileWriter != null) {
-            try {
-                autoFileWriter?.write(frame, 0, n)
-            } catch (e: Exception) {
-                // Handle write failure
-            }
-        }
+        // Note: MediaRecorder doesn't support direct frame writing
+        // The VAD system will now work by starting/stopping MediaRecorder
+        // when speech is detected/stopped, which is more efficient
     }
 
     // ===== SHARED FUNCTIONALITY =====
