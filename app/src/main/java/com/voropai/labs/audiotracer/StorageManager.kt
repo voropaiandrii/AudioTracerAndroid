@@ -12,9 +12,15 @@ class StorageManager(private val context: Context) {
     private var currentSessionId: String? = null
     private var currentFileIndex: Int = 0
     private var currentFile: File? = null
+    private var currentRecordingMode: RecordingMode = RecordingMode.MANUAL
     
     private val prefs: SharedPreferences = context.getSharedPreferences("AudioTracerPrefs", Context.MODE_PRIVATE)
     private val SESSION_START_TIME_KEY = "session_start_time"
+    
+    enum class RecordingMode {
+        MANUAL,     // OnDemand mode
+        AUTOMATIC   // Automatic voice detection mode
+    }
     
     fun getAudioDirectory(): File {
         // Create AudioTracer folder in Downloads directory for easy access
@@ -28,20 +34,25 @@ class StorageManager(private val context: Context) {
         return audioTracerDir
     }
     
-    fun getTodayFile(): File {
+    fun getTodayFile(mode: RecordingMode = RecordingMode.MANUAL): File {
         val audioDir = getAudioDirectory()
         val date = SimpleDateFormat("yyyy-MM-dd-HH-mm-SS", Locale.US).format(Date())
-        return File(audioDir, "$date.m4a")
+        val suffix = when (mode) {
+            RecordingMode.MANUAL -> "_OM"
+            RecordingMode.AUTOMATIC -> "_AM"
+        }
+        return File(audioDir, "${date}${suffix}.m4a")
     }
     
     /**
      * Start a new recording session and return the first file
      */
-    fun startRecordingSession(): File {
+    fun startRecordingSession(mode: RecordingMode = RecordingMode.MANUAL): File {
         val audioDir = getAudioDirectory()
         val timestamp = SimpleDateFormat("yyyy-MM-dd-HH-mm-SS", Locale.US).format(Date())
         currentSessionId = timestamp
         currentFileIndex = 0
+        currentRecordingMode = mode
         return createSessionFile(currentFileIndex)
     }
     
@@ -59,7 +70,11 @@ class StorageManager(private val context: Context) {
     fun createSessionFile(index: Int): File {
         val audioDir = getAudioDirectory()
         val sessionId = currentSessionId ?: startRecordingSession().nameWithoutExtension
-        val fileName = "${sessionId}_p${index}.m4a"
+        val modeSuffix = when (currentRecordingMode) {
+            RecordingMode.MANUAL -> "_OM"
+            RecordingMode.AUTOMATIC -> "_AM"
+        }
+        val fileName = "${sessionId}_p${index}${modeSuffix}.m4a"
         return File(audioDir, fileName)
     }
     
@@ -74,11 +89,17 @@ class StorageManager(private val context: Context) {
     fun getCurrentFileIndex(): Int = currentFileIndex
     
     /**
+     * Get the current recording mode
+     */
+    fun getCurrentRecordingMode(): RecordingMode = currentRecordingMode
+    
+    /**
      * Reset the session state
      */
     fun resetSession() {
         currentSessionId = null
         currentFileIndex = 0
+        currentRecordingMode = RecordingMode.MANUAL
         prefs.edit().remove(SESSION_START_TIME_KEY).apply()
     }
     
@@ -169,6 +190,71 @@ class StorageManager(private val context: Context) {
             }?.sortedByDescending { it.lastModified() } ?: emptyList()
         } else {
             emptyList()
+        }
+    }
+    
+    /**
+     * Get audio files by recording mode
+     */
+    fun getAudioFilesByMode(mode: RecordingMode): List<File> {
+        val audioDir = getAudioDirectory()
+        return if (audioDir.exists() && audioDir.isDirectory) {
+            val suffix = when (mode) {
+                RecordingMode.MANUAL -> "_OM"
+                RecordingMode.AUTOMATIC -> "_AM"
+            }
+            audioDir.listFiles { file ->
+                file.isFile && 
+                file.extension.lowercase() == "m4a" && 
+                file.name.endsWith("$suffix.m4a")
+            }?.sortedByDescending { it.lastModified() } ?: emptyList()
+        } else {
+            emptyList()
+        }
+    }
+    
+    /**
+     * Get manual (OnDemand) recording files
+     */
+    fun getManualRecordingFiles(): List<File> {
+        return getAudioFilesByMode(RecordingMode.MANUAL)
+    }
+    
+    /**
+     * Get automatic recording files
+     */
+    fun getAutomaticRecordingFiles(): List<File> {
+        return getAudioFilesByMode(RecordingMode.AUTOMATIC)
+    }
+    
+    /**
+     * Parse recording mode from filename
+     */
+    fun getRecordingModeFromFile(file: File): RecordingMode? {
+        return when {
+            file.name.endsWith("_OM.m4a") -> RecordingMode.MANUAL
+            file.name.endsWith("_AM.m4a") -> RecordingMode.AUTOMATIC
+            else -> null
+        }
+    }
+    
+    /**
+     * Get human-readable description of recording mode
+     */
+    fun getRecordingModeDescription(mode: RecordingMode): String {
+        return when (mode) {
+            RecordingMode.MANUAL -> "OnDemand"
+            RecordingMode.AUTOMATIC -> "Automatic"
+        }
+    }
+    
+    /**
+     * Get short abbreviation of recording mode
+     */
+    fun getRecordingModeAbbreviation(mode: RecordingMode): String {
+        return when (mode) {
+            RecordingMode.MANUAL -> "OM"
+            RecordingMode.AUTOMATIC -> "AM"
         }
     }
 } 

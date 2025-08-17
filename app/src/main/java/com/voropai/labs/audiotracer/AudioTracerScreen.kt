@@ -42,6 +42,10 @@ interface RecorderViewModelInterface {
     fun pauseRecording()
     fun resumeRecording()
     fun stopRecording()
+    fun startAutoRecording()
+    fun stopAutoRecording()
+    fun isAutoRecordingEnabled(): Boolean
+    fun isManualRecordingEnabled(): Boolean
     fun updateStorageInfo()
     fun updateRecordingDuration()
 }
@@ -62,6 +66,10 @@ class MockRecorderViewModel : RecorderViewModelInterface {
     override fun pauseRecording() {}
     override fun resumeRecording() {}
     override fun stopRecording() {}
+    override fun startAutoRecording() {}
+    override fun stopAutoRecording() {}
+    override fun isAutoRecordingEnabled() = false
+    override fun isManualRecordingEnabled() = true
     override fun updateStorageInfo() {}
     override fun updateRecordingDuration() {}
 }
@@ -81,6 +89,10 @@ class MockRecorderViewModelNoPermissions : RecorderViewModelInterface {
     override fun pauseRecording() {}
     override fun resumeRecording() {}
     override fun stopRecording() {}
+    override fun startAutoRecording() {}
+    override fun stopAutoRecording() {}
+    override fun isAutoRecordingEnabled() = false
+    override fun isManualRecordingEnabled() = false
     override fun updateStorageInfo() {}
     override fun updateRecordingDuration() {}
 }
@@ -108,8 +120,10 @@ fun AudioTracerScreen(
 
     // Update recording duration every second when recording
     LaunchedEffect(status) {
-        if (status == RecordingStatus.Recording || status == RecordingStatus.Paused) {
-            while (status == RecordingStatus.Recording || status == RecordingStatus.Paused) {
+        if (status == RecordingStatus.Recording || status == RecordingStatus.Paused || 
+            status == RecordingStatus.Armed || status == RecordingStatus.AutoRecording) {
+            while (status == RecordingStatus.Recording || status == RecordingStatus.Paused ||
+                   status == RecordingStatus.Armed || status == RecordingStatus.AutoRecording) {
                 viewModel.updateRecordingDuration()
                 delay(1_000)
             }
@@ -143,23 +157,118 @@ fun AudioTracerScreen(
 
                 Spacer(modifier = Modifier.height(24.dp))
 
-                RecordingControls(
+                // Recording mode selection
+                RecordingModeSelector(
                     status = status,
-                    onStart = { viewModel.startRecording() },
-                    onPauseResume = {
-                        if (status == RecordingStatus.Recording) viewModel.pauseRecording()
-                        else if (status == RecordingStatus.Paused) viewModel.resumeRecording()
-                    },
-                    onStop = { viewModel.stopRecording() }
+                    onManualMode = { viewModel.startRecording() },
+                    onAutoMode = { viewModel.startAutoRecording() },
+                    onStop = { 
+                        if (viewModel.isAutoRecordingEnabled()) {
+                            viewModel.stopAutoRecording()
+                        } else {
+                            viewModel.stopRecording()
+                        }
+                    }
                 )
 
-                Spacer(modifier = Modifier.height(32.dp))
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Manual recording controls (only show when in manual mode)
+                if (viewModel.isManualRecordingEnabled()) {
+                    ManualRecordingControls(
+                        status = status,
+                        onPauseResume = {
+                            if (status == RecordingStatus.Recording) viewModel.pauseRecording()
+                            else if (status == RecordingStatus.Paused) viewModel.resumeRecording()
+                        },
+                        onStop = { viewModel.stopRecording() }
+                    )
+                    
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
 
                 RecordingDurationDisplay(recordingDuration = recordingDuration)
 
                 Spacer(modifier = Modifier.height(16.dp))
 
                 StorageInfoDisplay(storageInfo = storageInfo)
+            }
+        }
+    }
+}
+
+@Composable
+fun RecordingModeSelector(
+    status: RecordingStatus,
+    onManualMode: () -> Unit,
+    onAutoMode: () -> Unit,
+    onStop: () -> Unit
+) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            text = "Recording Mode",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(bottom = 16.dp)
+        )
+        
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Button(
+                onClick = onManualMode,
+                enabled = status == RecordingStatus.Stopped
+            ) {
+                Text("Manual Recording")
+            }
+            
+            Button(
+                onClick = onAutoMode,
+                enabled = status == RecordingStatus.Stopped
+            ) {
+                Text("Voice Detection")
+            }
+        }
+        
+        if (status != RecordingStatus.Stopped) {
+            Spacer(modifier = Modifier.height(16.dp))
+            Button(
+                onClick = onStop,
+                enabled = status != RecordingStatus.Stopped
+            ) {
+                Text("Stop All")
+            }
+        }
+    }
+}
+
+@Composable
+fun ManualRecordingControls(
+    status: RecordingStatus,
+    onPauseResume: () -> Unit,
+    onStop: () -> Unit
+) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            text = "Manual Controls",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(bottom = 16.dp)
+        )
+        
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Button(
+                onClick = onPauseResume,
+                enabled = status == RecordingStatus.Recording || status == RecordingStatus.Paused
+            ) {
+                Text(if (status == RecordingStatus.Recording) "Pause" else "Resume")
+            }
+            
+            Button(
+                onClick = onStop,
+                enabled = status != RecordingStatus.Stopped
+            ) {
+                Text("Stop")
             }
         }
     }
@@ -202,41 +311,12 @@ fun PermissionRequestCard(
 }
 
 @Composable
-fun RecordingControls(
-    status: RecordingStatus,
-    onStart: () -> Unit,
-    onPauseResume: () -> Unit,
-    onStop: () -> Unit
-) {
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        Button(
-            onClick = onStart,
-            enabled = status == RecordingStatus.Stopped
-        ) {
-            Text("Start")
-        }
-        Button(
-            onClick = onPauseResume,
-            enabled = status == RecordingStatus.Recording || status == RecordingStatus.Paused
-        ) {
-            Text(if (status == RecordingStatus.Recording) "Pause" else "Resume")
-        }
-        Button(
-            onClick = onStop,
-            enabled = status != RecordingStatus.Stopped
-        ) {
-            Text("Stop")
-        }
-    }
-}
-
-@Composable
 fun StatusDisplay(status: RecordingStatus) {
     val statusText = when (status) {
         RecordingStatus.Recording -> "Recording"
         RecordingStatus.Paused -> "Paused"
+        RecordingStatus.Armed -> "Listening for voice..."
+        RecordingStatus.AutoRecording -> "Auto Recording"
         RecordingStatus.Stopped -> "Stopped"
     }
     Text(

@@ -14,7 +14,7 @@ import java.io.File
 import java.text.DecimalFormat
 import javax.inject.Inject
 
-enum class RecordingStatus { Stopped, Recording, Paused }
+enum class RecordingStatus { Stopped, Recording, Paused, Armed, AutoRecording }
 
 @HiltViewModel
 open class RecorderViewModel @Inject constructor(
@@ -50,6 +50,8 @@ open class RecorderViewModel @Inject constructor(
     fun getPermissionRequestCode(): Int {
         return permissionManager.getPermissionRequestCode()
     }
+
+    // ===== MANUAL RECORDING (existing functionality) =====
 
     override open fun startRecording() {
         if (!hasRequiredPermissions()) return
@@ -94,10 +96,42 @@ open class RecorderViewModel @Inject constructor(
         _recordingDuration.value = "00:00:00:00"
     }
 
+    // ===== AUTOMATIC RECORDING (new functionality) =====
+
+    override fun startAutoRecording() {
+        if (!hasRequiredPermissions()) return
+        
+        val intent = Intent(getApplication(), AudioRecorderService::class.java).apply {
+            action = AudioRecorderService.ACTION_START_AUTO
+        }
+        getApplication<Application>().startForegroundService(intent)
+        _status.value = RecordingStatus.Armed
+    }
+
+    override fun stopAutoRecording() {
+        val intent = Intent(getApplication(), AudioRecorderService::class.java).apply {
+            action = AudioRecorderService.ACTION_STOP_AUTO
+        }
+        getApplication<Application>().startForegroundService(intent)
+        _status.value = RecordingStatus.Stopped
+        storageManager.resetSession()
+        _recordingDuration.value = "00:00:00:00"
+    }
+
+    override fun isAutoRecordingEnabled(): Boolean {
+        return _status.value == RecordingStatus.Armed || _status.value == RecordingStatus.AutoRecording
+    }
+
+    override fun isManualRecordingEnabled(): Boolean {
+        return _status.value == RecordingStatus.Recording || _status.value == RecordingStatus.Paused
+    }
+
     private fun checkServiceStatus() {
         viewModelScope.launch(Dispatchers.IO) {
             // Check if there's an active recording session
             if (storageManager.hasActiveSession()) {
+                // Determine if it's auto or manual recording based on service state
+                // For now, we'll assume manual recording if there's an active session
                 _status.value = RecordingStatus.Recording
                 updateRecordingDuration()
             } else {
